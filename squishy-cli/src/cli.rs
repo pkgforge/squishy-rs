@@ -78,4 +78,20 @@ pub enum Commands {
         #[arg(required = false, long, short)]
         write: Option<Option<PathBuf>>,
     },
+
+    /// Extract DwarFS filesystem
+    #[cfg(feature = "dwarfs")]
+    DwarfsExtract {
+        /// Path to dwarfs file
+        #[arg(required = true)]
+        file: PathBuf,
+
+        /// Offset
+        #[arg(required = false, long, short)]
+        offset: Option<u64>,
+
+        /// Whether to write files to disk
+        #[arg(required = false, long, short)]
+        write: Option<Option<PathBuf>>,
+    },
 }

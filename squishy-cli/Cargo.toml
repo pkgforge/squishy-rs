@@ -1,6 +1,6 @@
 [package]
 name = "squishy-cli"
-description = "A simple CLI tool to work with SquashFS files"
+description = "A simple CLI tool to work with SquashFS and DwarFS files"
 version = "0.3.1"
 authors.workspace = true
 license.workspace = true
@@ -12,8 +12,12 @@ keywords.workspace = true
 name = "squishy"
 path = "src/main.rs"
 
+[features]
+default = ["dwarfs"]
+dwarfs = ["squishy/dwarfs"]
+
 [dependencies]
 squishy = { path = "../squishy", version = "0.3.1", features = ["appimage", "rayon"] }
-clap = { version = "4.5.20", features = ["cargo", "derive"] }
-goblin = { version = "0.9.2", default-features = false, features = ["elf32", "elf64", "endian_fd", "std"] }
-rayon = "1.10.0"
+clap = { version = "4.5.53", features = ["cargo", "derive"] }
+goblin = { version = "0.10.4", default-features = false, features = ["elf32", "elf64", "endian_fd", "std"] }
+rayon = "1.11.0"

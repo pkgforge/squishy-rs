@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use backhand::{kind::Kind, BasicFile, FilesystemReader, InnerNode, NodeHeader};
+use backhand::{kind::Kind, FilesystemReader, InnerNode, NodeHeader, SquashfsFileReader};
 use error::SquishyError;
 
 #[cfg(feature = "rayon")]
@@ -14,6 +14,9 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 #[cfg(feature = "appimage")]
 pub mod appimage;
+
+#[cfg(feature = "dwarfs")]
+pub mod dwarfs;
 
 pub mod error;
 
@@ -38,7 +41,7 @@ pub struct SquashFSEntry<'a> {
 /// The EntryKind enum represents the different types of entries that can be found in the SquashFS filesystem.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EntryKind<'a> {
-    File(&'a BasicFile),
+    File(&'a SquashfsFileReader),
     Directory,
     Symlink(PathBuf),
     Unknown,
@@ -116,15 +119,15 @@ impl<'a> SquashFS<'a> {
     }
 
     /// Returns an iterator over all the entries in the SquashFS filesystem.
-    pub fn entries(&self) -> impl Iterator<Item = SquashFSEntry> + '_ {
+    pub fn entries(&self) -> impl Iterator<Item = SquashFSEntry<'_>> + use<'_, 'a> {
         self.reader.files().map(|node| {
             let size = match &node.inner {
-                InnerNode::File(file) => file.basic.file_size,
+                InnerNode::File(file) => file.file_len() as u32,
                 _ => 0,
             };
 
             let kind = match &node.inner {
-                InnerNode::File(file) => EntryKind::File(&file.basic),
+                InnerNode::File(file) => EntryKind::File(file),
                 InnerNode::Dir(_) => EntryKind::Directory,
                 InnerNode::Symlink(symlink) => EntryKind::Symlink(
                     PathBuf::from(format!("/{}", symlink.link.display())).clone(),
@@ -143,17 +146,17 @@ impl<'a> SquashFS<'a> {
 
     #[cfg(feature = "rayon")]
     /// Returns a parallel iterator over all the entries in the SquashFS filesystem.
-    pub fn par_entries(&self) -> impl ParallelIterator<Item = SquashFSEntry> + '_ {
+    pub fn par_entries(&self) -> impl ParallelIterator<Item = SquashFSEntry<'_>> + use<'_, 'a> {
         self.reader
             .files()
             .map(|node| {
                 let size = match &node.inner {
-                    InnerNode::File(file) => file.basic.file_size,
+                    InnerNode::File(file) => file.file_len() as u32,
                     _ => 0,
                 };
 
                 let kind = match &node.inner {
-                    InnerNode::File(file) => EntryKind::File(&file.basic),
+                    InnerNode::File(file) => EntryKind::File(file),
                     InnerNode::Dir(_) => EntryKind::Directory,
                     InnerNode::Symlink(symlink) => EntryKind::Symlink(
                         PathBuf::from(format!("/{}", symlink.link.display())).clone(),
@@ -177,7 +180,7 @@ impl<'a> SquashFS<'a> {
     ///
     /// # Arguments
     /// * `predicate` - A function that takes a &Path and returns a bool, indicating whether the entry should be included.
-    pub fn find_entries<F>(&self, predicate: F) -> impl Iterator<Item = SquashFSEntry> + '_
+    pub fn find_entries<F>(&self, predicate: F) -> impl Iterator<Item = SquashFSEntry<'_>> + use<'_, 'a, F>
     where
         F: Fn(&Path) -> bool + 'a,
     {
@@ -197,7 +200,7 @@ impl<'a> SquashFS<'a> {
         for node in self.reader.files() {
             if node.fullpath == path {
                 if let InnerNode::File(file) = &node.inner {
-                    let mut reader = self.reader.file(&file.basic).reader().bytes();
+                    let mut reader = self.reader.file(file).reader().bytes();
                     let mut contents = Vec::new();
 
                     while let Some(Ok(byte)) = reader.next() {
@@ -216,14 +219,14 @@ impl<'a> SquashFS<'a> {
     /// to the specified destination path.
     ///
     /// # Arguments
-    /// * `file` - The basic file within the SquashFS filesystem.
+    /// * `file` - The file within the SquashFS filesystem.
     /// * `dest` - The destination path to write the file to.
     ///
     /// # Returns
     /// An empty result, or an error if the file cannot be read or written.
-    pub fn write_file<P: AsRef<Path>>(&self, file: &BasicFile, dest: P) -> Result<()> {
+    pub fn write_file<P: AsRef<Path>>(&self, file: &SquashfsFileReader, dest: P) -> Result<()> {
         let output_file = File::create(dest)?;
-        let mut writer = BufWriter::with_capacity(file.file_size as usize, &output_file);
+        let mut writer = BufWriter::with_capacity(file.file_len(), &output_file);
         let file = self.reader.file(file);
         let mut reader = file.reader();
         std::io::copy(&mut reader, &mut writer)?;
@@ -234,7 +237,7 @@ impl<'a> SquashFS<'a> {
     /// to the specified destination path with permissions.
     ///
     /// # Arguments
-    /// * `file` - The basic file within the SquashFS filesystem.
+    /// * `file` - The file within the SquashFS filesystem.
     /// * `dest` - The destination path to write the file to.
     /// * `header` - Node header containing file information.
     ///
@@ -242,14 +245,14 @@ impl<'a> SquashFS<'a> {
     /// An empty result, or an error if the file cannot be read or written.
     pub fn write_file_with_permissions<P: AsRef<Path>>(
         &self,
-        file: &BasicFile,
+        file: &SquashfsFileReader,
         dest: P,
         header: NodeHeader,
     ) -> Result<()> {
         let output_file = File::create(&dest)?;
         let mode = u32::from(header.permissions);
         fs::set_permissions(dest, Permissions::from_mode(mode))?;
-        let mut writer = BufWriter::with_capacity(file.file_size as usize, &output_file);
+        let mut writer = BufWriter::with_capacity(file.file_len(), &output_file);
         let file = self.reader.file(file);
         let mut reader = file.reader();
         std::io::copy(&mut reader, &mut writer)?;
@@ -264,7 +267,7 @@ impl<'a> SquashFS<'a> {
     ///
     /// # Returns
     /// The final target entry, or None if the entry is not a symlink, or an error if a cycle is detected.
-    pub fn resolve_symlink(&self, entry: &SquashFSEntry) -> Result<Option<SquashFSEntry>> {
+    pub fn resolve_symlink(&self, entry: &SquashFSEntry) -> Result<Option<SquashFSEntry<'_>>> {
         match &entry.kind {
             EntryKind::Symlink(target) => {
                 let mut visited = HashSet::new();
@@ -288,7 +291,7 @@ impl<'a> SquashFS<'a> {
         &self,
         target: &Path,
         visited: &mut HashSet<PathBuf>,
-    ) -> Result<Option<SquashFSEntry>> {
+    ) -> Result<Option<SquashFSEntry<'_>>> {
         if !visited.insert(target.to_path_buf()) {
             return Err(SquishyError::SymlinkError("Cyclic symlink detected".into()));
         }
