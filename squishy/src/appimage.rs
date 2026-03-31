@@ -243,20 +243,16 @@ impl<'a> AppImage<'a> {
                 }))
             }
             #[cfg(feature = "dwarfs")]
-            AppImageFS::DwarFS(dwarfs) => {
-                Box::new(dwarfs.entries().map(|entry| AppImageEntry {
-                    path: entry.path.clone(),
-                    size: entry.size,
-                    kind: match &entry.kind {
-                        DwarFSEntryKind::File => AppImageEntryKind::File,
-                        DwarFSEntryKind::Directory => AppImageEntryKind::Directory,
-                        DwarFSEntryKind::Symlink(target) => {
-                            AppImageEntryKind::Symlink(target.clone())
-                        }
-                        _ => AppImageEntryKind::Unknown,
-                    },
-                }))
-            }
+            AppImageFS::DwarFS(dwarfs) => Box::new(dwarfs.entries().map(|entry| AppImageEntry {
+                path: entry.path.clone(),
+                size: entry.size,
+                kind: match &entry.kind {
+                    DwarFSEntryKind::File => AppImageEntryKind::File,
+                    DwarFSEntryKind::Directory => AppImageEntryKind::Directory,
+                    DwarFSEntryKind::Symlink(target) => AppImageEntryKind::Symlink(target.clone()),
+                    _ => AppImageEntryKind::Unknown,
+                },
+            })),
         }
     }
 

@@ -77,7 +77,12 @@ fn main() {
                             fs::create_dir_all(write_path).unwrap();
                             let output_path = write_path.join(file_name);
                             match appimage.write_entry(&desktop, &output_path) {
-                                Ok(_) => log!(args.quiet, "Wrote {} to {}", desktop.path.display(), output_path.display()),
+                                Ok(_) => log!(
+                                    args.quiet,
+                                    "Wrote {} to {}",
+                                    desktop.path.display(),
+                                    output_path.display()
+                                ),
                                 Err(e) => elog!(args.quiet, "Failed to write desktop: {}", e),
                             }
                         } else {
@@ -94,7 +99,12 @@ fn main() {
                             fs::create_dir_all(write_path).unwrap();
                             let output_path = write_path.join(file_name);
                             match appimage.write_entry(&icon, &output_path) {
-                                Ok(_) => log!(args.quiet, "Wrote {} to {}", icon.path.display(), output_path.display()),
+                                Ok(_) => log!(
+                                    args.quiet,
+                                    "Wrote {} to {}",
+                                    icon.path.display(),
+                                    output_path.display()
+                                ),
                                 Err(e) => elog!(args.quiet, "Failed to write icon: {}", e),
                             }
                         } else {
@@ -111,7 +121,12 @@ fn main() {
                             fs::create_dir_all(write_path).unwrap();
                             let output_path = write_path.join(file_name);
                             match appimage.write_entry(&appstream, &output_path) {
-                                Ok(_) => log!(args.quiet, "Wrote {} to {}", appstream.path.display(), output_path.display()),
+                                Ok(_) => log!(
+                                    args.quiet,
+                                    "Wrote {} to {}",
+                                    appstream.path.display(),
+                                    output_path.display()
+                                ),
                                 Err(e) => elog!(args.quiet, "Failed to write appstream: {}", e),
                             }
                         } else {

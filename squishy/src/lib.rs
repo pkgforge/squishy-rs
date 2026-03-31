@@ -180,7 +180,10 @@ impl<'a> SquashFS<'a> {
     ///
     /// # Arguments
     /// * `predicate` - A function that takes a &Path and returns a bool, indicating whether the entry should be included.
-    pub fn find_entries<F>(&self, predicate: F) -> impl Iterator<Item = SquashFSEntry<'_>> + use<'_, 'a, F>
+    pub fn find_entries<F>(
+        &self,
+        predicate: F,
+    ) -> impl Iterator<Item = SquashFSEntry<'_>> + use<'_, 'a, F>
     where
         F: Fn(&Path) -> bool + 'a,
     {

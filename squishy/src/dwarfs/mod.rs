@@ -6,9 +6,47 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use dwarfs::{positioned_io::Slice, Archive, ArchiveIndex, AsChunks, InodeKind};
+use positioned_io::Slice;
+
+use archive::{Archive, ArchiveIndex, AsChunks, InodeKind};
 
 use crate::error::SquishyError;
+
+// --- Internal macros used by submodules ---
+
+macro_rules! bail {
+    ($err:expr $(,)?) => {
+        return Err(Into::into($err))
+    };
+}
+
+macro_rules! trace {
+    ($($tt:tt)*) => {
+        let _ = if false {
+            let _ = ::std::format_args!($($tt)*);
+        };
+    };
+}
+
+macro_rules! trace_time {
+    ($($tt:tt)*) => {
+        trace!($($tt)*)
+    };
+}
+
+/// The range of filesystem version tuple `(major, minor)` supported by this library.
+///
+/// Currently this is `(2, 3)..=(2, 5)`.
+pub const SUPPORTED_VERSION_RANGE: std::ops::RangeInclusive<(u8, u8)> = (2, 3)..=(2, 5);
+
+// --- Submodules (ported from dwarfs-rs) ---
+
+pub mod archive;
+pub mod fsst;
+pub mod metadata;
+pub mod section;
+
+// --- High-level wrapper types ---
 
 pub type Result<T> = std::result::Result<T, SquishyError>;
 
@@ -43,13 +81,6 @@ pub enum DwarFSEntryKind {
 
 impl DwarFS {
     /// Creates a new DwarFS instance from a file path with an offset.
-    ///
-    /// # Arguments
-    /// * `path` - The path to the DwarFS file.
-    /// * `offset` - The offset at which the DwarFS data begins.
-    ///
-    /// # Returns
-    /// A DwarFS instance if the DwarFS data is found and valid, or an error if it is not.
     pub fn from_path_with_offset<P: AsRef<Path>>(path: P, offset: u64) -> Result<Self> {
         let file = File::open(path.as_ref())?;
         let file_size = file.metadata()?.len();
@@ -63,12 +94,6 @@ impl DwarFS {
     }
 
     /// Creates a new DwarFS instance from a file path. Tries to find offset automatically.
-    ///
-    /// # Arguments
-    /// * `path` - The path to the DwarFS file.
-    ///
-    /// # Returns
-    /// A DwarFS instance if the DwarFS data is found and valid, or an error if it is not.
     pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Self> {
         let mut file = File::open(path.as_ref())?;
         let offset = Self::find_dwarfs_offset(&mut file)?;
@@ -76,22 +101,15 @@ impl DwarFS {
     }
 
     /// Finds the starting offset of the DwarFS data within the input file.
-    ///
-    /// # Arguments
-    /// * `file` - The file to search for DwarFS magic.
-    ///
-    /// # Returns
-    /// The starting offset of the DwarFS data, or an error if the DwarFS data is not found.
     pub fn find_dwarfs_offset(file: &mut File) -> Result<u64> {
-        let mut buf = [0u8; 6];
+        let mut buf = [0u8; 8];
         while file.read_exact(&mut buf).is_ok() {
-            if buf == DWARFS_MAGIC {
+            if &buf[..6] == DWARFS_MAGIC && buf[6] == 2 {
                 let found = file.stream_position()? - buf.len() as u64;
                 file.rewind()?;
                 return Ok(found);
             }
-            // Move back 5 bytes to allow for overlapping matches
-            file.seek(std::io::SeekFrom::Current(-5))?;
+            file.seek(std::io::SeekFrom::Current(-7))?;
         }
         Err(SquishyError::NoDwarFsFound)
     }
@@ -104,7 +122,7 @@ impl DwarFS {
     /// Recursively walks a directory and yields entries
     fn walk_dir<'a>(
         &'a self,
-        dir: dwarfs::Dir<'a>,
+        dir: archive::Dir<'a>,
         base_path: PathBuf,
     ) -> Box<dyn Iterator<Item = DwarFSEntry> + 'a> {
         let entries_iter = dir.entries().flat_map(move |entry| {
@@ -126,12 +144,9 @@ impl DwarFS {
                         as Box<dyn Iterator<Item = DwarFSEntry>>;
                 }
                 InodeKind::File(f) => (DwarFSEntryKind::File, f.as_chunks().total_size()),
-                InodeKind::Symlink(s) => {
-                    (DwarFSEntryKind::Symlink(PathBuf::from(s.target())), 0)
-                }
+                InodeKind::Symlink(s) => (DwarFSEntryKind::Symlink(PathBuf::from(s.target())), 0),
                 InodeKind::Device(_) => (DwarFSEntryKind::Device, 0),
                 InodeKind::Ipc(_) => (DwarFSEntryKind::Ipc, 0),
-                _ => (DwarFSEntryKind::Unknown, 0),
             };
 
             Box::new(std::iter::once(DwarFSEntry {
@@ -147,9 +162,6 @@ impl DwarFS {
 
     /// Returns an iterator over all the entries in the DwarFS filesystem
     /// that match the provided predicate function.
-    ///
-    /// # Arguments
-    /// * `predicate` - A function that takes a &Path and returns a bool, indicating whether the entry should be included.
     pub fn find_entries<F>(&self, predicate: F) -> impl Iterator<Item = DwarFSEntry> + '_
     where
         F: Fn(&Path) -> bool + 'static,
@@ -158,12 +170,6 @@ impl DwarFS {
     }
 
     /// Reads the contents of the specified file from the DwarFS filesystem.
-    ///
-    /// # Arguments
-    /// * `path` - The path to the file within the DwarFS filesystem.
-    ///
-    /// # Returns
-    /// The contents of the file as a Vec<u8>, or an error if the file is not found.
     pub fn read_file<P: AsRef<Path>>(&mut self, path: P) -> Result<Vec<u8>> {
         let path = path.as_ref();
         let path_str = path.to_string_lossy();
@@ -173,9 +179,10 @@ impl DwarFS {
             .filter(|s| !s.is_empty())
             .collect();
 
-        let inode = self.index.get_path(path_components.iter()).ok_or_else(|| {
-            SquishyError::FileNotFound(path.to_path_buf())
-        })?;
+        let inode = self
+            .index
+            .get_path(path_components.iter())
+            .ok_or_else(|| SquishyError::FileNotFound(path.to_path_buf()))?;
 
         let file = inode.as_file().ok_or_else(|| {
             SquishyError::InvalidDwarFS(format!("{} is not a file", path.display()))
@@ -187,13 +194,6 @@ impl DwarFS {
 
     /// Writes the contents of the specified file from the DwarFS filesystem
     /// to the specified destination path.
-    ///
-    /// # Arguments
-    /// * `entry` - The DwarFS entry to extract.
-    /// * `dest` - The destination path to write the file to.
-    ///
-    /// # Returns
-    /// An empty result, or an error if the file cannot be read or written.
     pub fn write_file<P: AsRef<Path>>(&mut self, entry: &DwarFSEntry, dest: P) -> Result<()> {
         if entry.kind != DwarFSEntryKind::File {
             return Err(SquishyError::InvalidDwarFS("Entry is not a file".into()));
@@ -209,13 +209,6 @@ impl DwarFS {
 
     /// Writes the contents of the specified file from the DwarFS filesystem
     /// to the specified destination path with permissions.
-    ///
-    /// # Arguments
-    /// * `entry` - The DwarFS entry to extract.
-    /// * `dest` - The destination path to write the file to.
-    ///
-    /// # Returns
-    /// An empty result, or an error if the file cannot be read or written.
     pub fn write_file_with_permissions<P: AsRef<Path>>(
         &mut self,
         entry: &DwarFSEntry,
@@ -228,12 +221,6 @@ impl DwarFS {
 
     /// Resolves the symlink chain starting from the specified entry,
     /// returning the final target entry or an error if a cycle is detected.
-    ///
-    /// # Arguments
-    /// * `entry` - The entry to resolve the symlink for.
-    ///
-    /// # Returns
-    /// The final target entry, or None if the entry is not a symlink, or an error if a cycle is detected.
     pub fn resolve_symlink(&self, entry: &DwarFSEntry) -> Result<Option<DwarFSEntry>> {
         match &entry.kind {
             DwarFSEntryKind::Symlink(target) => {
@@ -258,11 +245,12 @@ impl DwarFS {
 
         let target_path = target.to_path_buf();
 
-        if let Some(target_entry) = self.find_entries(move |p| p == target_path.as_path()).next() {
+        if let Some(target_entry) = self
+            .find_entries(move |p| p == target_path.as_path())
+            .next()
+        {
             match &target_entry.kind {
-                DwarFSEntryKind::Symlink(next_target) => {
-                    self.follow_symlink(next_target, visited)
-                }
+                DwarFSEntryKind::Symlink(next_target) => self.follow_symlink(next_target, visited),
                 _ => Ok(Some(target_entry)),
             }
         } else {
