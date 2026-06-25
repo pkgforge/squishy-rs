@@ -16,6 +16,21 @@ pub type Result<T> = std::result::Result<T, SquishyError>;
 /// Magic bytes for SquashFS filesystem
 const SQUASHFS_MAGIC: &[u8] = b"hsqs";
 
+/// Upper bound on the size of a candidate desktop file, used to skip large
+/// `.desktop`-suffixed binaries without reading them.
+const MAX_DESKTOP_SIZE: u64 = 1 << 20;
+
+/// Returns whether the given bytes are a desktop entry file.
+fn is_desktop_file(bytes: &[u8]) -> bool {
+    if bytes.starts_with(goblin::elf::header::ELFMAG) {
+        return false;
+    }
+    String::from_utf8_lossy(bytes)
+        .lines()
+        .map(str::trim)
+        .any(|line| line == "[Desktop Entry]")
+}
+
 /// Detected filesystem type in an AppImage
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FilesystemType {
@@ -277,15 +292,36 @@ impl<'a> AppImage<'a> {
 
     /// Find desktop file in AppImage, filtered
     ///
+    /// The `.desktop` suffix alone is not enough, since a binary can share it.
+    /// Oversized candidates are skipped and the contents are verified to be a
+    /// desktop entry, preferring files under `/usr/share/applications/`.
+    ///
     /// # Returns
     /// A unified entry to the desktop file, if found
-    pub fn find_desktop(&self) -> Option<AppImageEntry> {
-        let desktop = self.entries().find(|entry| {
-            let path = entry.path.to_string_lossy().to_lowercase();
-            self.filter_path(&path) && path.ends_with(".desktop")
+    pub fn find_desktop(&mut self) -> Option<AppImageEntry> {
+        let mut candidates: Vec<AppImageEntry> = self
+            .entries()
+            .filter(|entry| {
+                let path = entry.path.to_string_lossy().to_lowercase();
+                self.filter_path(&path) && path.ends_with(".desktop")
+            })
+            .filter_map(|entry| self.resolve_symlink(entry))
+            .filter(|entry| entry.kind == AppImageEntryKind::File && entry.size <= MAX_DESKTOP_SIZE)
+            .collect();
+
+        candidates.sort_by_key(|entry| {
+            !entry
+                .path
+                .to_string_lossy()
+                .to_lowercase()
+                .contains("/usr/share/applications/")
         });
 
-        desktop.and_then(|entry| self.resolve_symlink(entry))
+        candidates.into_iter().find(|entry| {
+            self.read_entry(entry)
+                .map(|bytes| is_desktop_file(&bytes))
+                .unwrap_or(false)
+        })
     }
 
     /// Find appstream file in AppImage (appdata.xml | metainfo.xml)
@@ -442,5 +478,27 @@ impl<'a> AppImage<'a> {
         self.write_entry(entry, &dest)?;
         std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(mode))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_desktop_file;
+
+    #[test]
+    fn detects_desktop_entry() {
+        assert!(is_desktop_file(b"[Desktop Entry]\nName=Foo\n"));
+        assert!(is_desktop_file(b"\n  [Desktop Entry]  \nName=Foo\n"));
+    }
+
+    #[test]
+    fn rejects_elf_binary() {
+        assert!(!is_desktop_file(b"\x7fELF\x02\x01\x01\x00"));
+    }
+
+    #[test]
+    fn rejects_embedded_header_substring() {
+        assert!(!is_desktop_file(b"binary junk [Desktop Entry] more junk"));
+        assert!(!is_desktop_file(b"\x7fELF\x00[Desktop Entry]\x00"));
     }
 }

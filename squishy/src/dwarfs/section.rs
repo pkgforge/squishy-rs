@@ -7,7 +7,7 @@ use std::{fmt, mem::offset_of};
 
 use positioned_io::ReadAt;
 use xxhash_rust::xxh3::Xxh3Default;
-use zerocopy::{FromBytes, FromZeros, Immutable, IntoBytes, KnownLayout, little_endian as le};
+use zerocopy::{little_endian as le, FromBytes, FromZeros, Immutable, IntoBytes, KnownLayout};
 
 use super::SUPPORTED_VERSION_RANGE;
 

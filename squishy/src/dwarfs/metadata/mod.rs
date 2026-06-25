@@ -5,7 +5,7 @@
 use std::{borrow::Borrow, fmt, marker::PhantomData, ops};
 
 use bstr::BString;
-use serde::{Deserialize, Serialize, de};
+use serde::{de, Deserialize, Serialize};
 
 mod de_frozen;
 mod de_thrift;
@@ -154,7 +154,11 @@ pub struct SchemaField {
 impl SchemaField {
     fn offset_bits(&self) -> u16 {
         let o = self.offset;
-        if o >= 0 { o as u16 * 8 } else { (-o) as u16 }
+        if o >= 0 {
+            o as u16 * 8
+        } else {
+            (-o) as u16
+        }
     }
 }
 

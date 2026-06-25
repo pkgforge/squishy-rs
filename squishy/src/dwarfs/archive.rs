@@ -14,7 +14,7 @@ use positioned_io::{ReadAt, Size};
 use super::{
     fsst,
     metadata::{self, Error as ParserMetadataError, Metadata, Schema, StringTable},
-    section::{self, HEADER_SIZE, SectionIndexEntry, SectionReader, SectionType},
+    section::{self, SectionIndexEntry, SectionReader, SectionType, HEADER_SIZE},
 };
 
 /// Type alias using [`Error`] as the default error type.
