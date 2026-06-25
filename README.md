@@ -3,12 +3,12 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 
-A convenient wrapper around the [backhand](https://github.com/wcampbell0x2a/backhand) library for reading and extracting files from SquashFS filesystems. Provides both a library and CLI tool.
+A convenient wrapper around the [backhand](https://github.com/wcampbell0x2a/backhand) library for reading and extracting files from SquashFS and DwarFS filesystems. Provides both a library and CLI tool.
 
 ## Features
 
 - 📚 **Library Features**
-  - Read and extract files from SquashFS filesystems
+  - Read and extract files from SquashFS and DwarFS filesystems
   - Traverse filesystem entries
   - Handle symlinks with cycle detection
   - Search for files using custom predicates
